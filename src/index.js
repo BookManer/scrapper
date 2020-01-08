@@ -14,10 +14,10 @@ const SITE = 'https://redeem.microsoft.com/?wa=wsignin1.0';
         console.log(chalk.green('Окно создано!'));
         await authMicrosoft(page);
         console.log(chalk.blue('Аутентификация пройдена успешно!'));
-        // await checkTokensFromFile(page, path.join(__dirname, '../', 'tokens.txt'));
+        await checkToken(page, path.join(__dirname, '../'));
         console.log(chalk.green('Программа закончила свое выполнение!'));
+        browser.close();
     } catch (err) {
-        // browser.close();
         console.log(chalk.red('Что-то пошло не так, где-то ошибочка\n'+err));
     }
 })();
@@ -59,37 +59,65 @@ async function authMicrosoft(page) {
             setTimeout(() => {
                 const btn_next = document.querySelector('#idSIButton9');
                 btn_next.dispatchEvent(new Event('click'));
-            }, 1500);
+            }, 2400);
         }, credentials);
 
-        await page.waitForSelector('#wb_auto_blend_container');
-        await page.evaluate(() => {
-            let authKey = null;
-            fetch('https://redeem.microsoft.com/webblendredeem?lang=en-US&market=US&control=redeem&mock=false&metadata=mscomct&lang=en-US&cid=45dde1e9c4e53251&xhr=true&X-Requested-With=XMLHttpRequest&_=1578415732613', {
-                credentials: 'include',
-                ':authority': 'redeem.microsoft.com',
-                ':method': 'GET',
-                ':path': '/webblendredeem?lang=en-US&market=US&control=redeem&mock=false&metadata=mscomct&lang=en-US&cid=45dde1e9c4e53251&xhr=true&X-Requested-With=XMLHttpRequest&_=1578415732613',
-                ':scheme': 'https',
-                'accept': 'application/json, text/javascript, */*; q=0.01'
-            }).then(res => res.json())
-                .then(data => {
-                    authKey = data.metadata.mscomct;
-                    console.log('WLID1.0="' + authKey + '"');
-
-                    fetch(`https://purchase.mp.microsoft.com/v7.0/tokenDescriptions/4TPCC-6F7PV-34VFH-7C4DW-3XD6Z?market=RU&language=en-US&supportMultiAvailabilities=true`, {
-                        headers: {
-                            'Authorization': 'WLID1.0="' + authKey + '"',
-                        },
-                    }).then((res) => {
-                        return res.json();
-                    }).then((data) => {
-                        console.log(data);
-                    })
-                });
-        });
-        const srcIframe = await page.$eval('#wb_auto_blend_container', iframe => iframe.src);
     } catch (err) {
         throw err;
     }
+}
+
+async function checkToken(page, pathFile) {
+    const validTokens = [];
+
+    console.log(chalk.rgb(30, 247, 200).bold('Подготовка к проверке токенов...'));
+    await page.waitForSelector('#wb_auto_blend_container');
+    console.log(chalk.rgb(30, 247, 200).bold('Начинаем проверять...'));
+    let tokens = await fs.readFileSync(pathFile+'tokens.txt', 'utf-8').split('\n');
+    tokens = tokens.slice(0,tokens.length-1);
+
+    const authKey = await page.evaluate(() => {
+        const key = fetch('https://redeem.microsoft.com/webblendredeem?lang=en-US&market=US&control=redeem&mock=false&metadata=mscomct&lang=en-US&cid=45dde1e9c4e53251&xhr=true&X-Requested-With=XMLHttpRequest&_=1578415732613', {
+            credentials: 'include',
+            ':authority': 'redeem.microsoft.com',
+            ':method': 'GET',
+            ':path': '/webblendredeem?lang=en-US&market=US&control=redeem&mock=false&metadata=mscomct&lang=en-US&cid=45dde1e9c4e53251&xhr=true&X-Requested-With=XMLHttpRequest&_=1578415732613',
+            ':scheme': 'https',
+            'accept': 'application/json, text/javascript, */*; q=0.01'
+        })
+            .then(res => res.json())
+            .then(data => {
+                return data.metadata.mscomct;
+            });
+
+        return Promise.resolve(key);
+    });
+    console.log('authKey = ', chalk.rgb(176, 20, 219).bold(authKey));
+    for (let token of tokens) {
+        console.log('Проверяем токен: ', chalk.rgb(176, 20, 219).bold(token));
+        const res = await page.evaluate((token, authKey) => {
+            let resChecker = fetch(`https://purchase.mp.microsoft.com/v7.0/tokenDescriptions/${token}?market=RU&language=en-US&supportMultiAvailabilities=true`, {
+                headers: {
+                    'Authorization': 'WLID1.0="' + authKey + '"',
+                },
+            }).then((res) => {
+                return res.json();
+            }).then((data) => {
+                return data;
+            });
+
+            return Promise.resolve(resChecker);
+        }, token, authKey);
+
+        if (res.tokenState === "Redeemed") {
+            console.log(chalk.red('====== Этот токен, к сожалению, использованный ======'));
+        } else {
+            validTokens.push(token+'\n');
+            console.log(chalk.green('====== Этот токен будет записан в результирующий файл ======'));
+        }
+    }
+
+    console.log(validTokens.join(''));
+    await fs.writeFileSync(pathFile+'validTokens.txt', validTokens.join(''))
+
 }
